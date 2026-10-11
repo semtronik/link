@@ -4,8 +4,6 @@ What a Link-LR keeps of what its radio sees, and the format it keeps it
 in. The same lines travel live over USB (see [protocol.md](protocol.md)):
 one format, one parser, whether the app is reading a device or a file.
 
-Status: specified, not yet implemented.
-
 ## Principles
 
 - **Always on.** Recording starts at power-up and never stops. There is no
@@ -48,7 +46,9 @@ A session **closes** on:
 A session **opens** when the Journal screen is displayed and no session
 is running. The device starts on the Journal, so power-up opens one.
 Other screens (preferences, date and time, about...) leave the session
-alone.
+alone. On a first start, or after a factory reset, the setup (language,
+region, clock) comes before the Journal, and the clock step alone when
+only the clock was lost: nothing is recorded until it is done.
 
 A reset or a crash leaves no closing line. The next session's boot reason
 says what happened.
@@ -61,6 +61,8 @@ says what happened.
   first files were deleted by rotation still says what it was recorded
   with.
 - Rotation deletes whole files, oldest first.
+- A factory reset deletes them all, with no closing line
+  ([protocol.md](protocol.md), `factory_reset`).
 
 File names and layout on the partition are internal. The app goes
 through the commands in [protocol.md](protocol.md), never through files.
@@ -73,13 +75,10 @@ a `type`.
 Conventions:
 
 - A field with no value is **omitted**, never set to 0 or `null`.
-- Units are in the field name where there is one: `_hz`, `_dbm`, `_db`,
-  `_us`.
+- Units are in the field name where there is one: `_hz`, `_dbm`, `_db`.
 - `ts` is wall-clock time, milliseconds since 1970-01-01 UTC. It only
   dates a line: it can move when the clock is corrected. Line order is
   file order.
-- Fields under `dbg` are for diagnosis. They may change or go without
-  notice; nothing in the product relies on them.
 
 ### `session`
 
@@ -92,16 +91,17 @@ First line of a session, and of each of its files.
 | `part` | int | File index within the session, from 1 |
 | `ts` | int | When the session opened |
 | `open` | string | Why: `boot`, or the reason the previous session closed |
-| `boot` | string | When `open` is `boot`: `power_on`, `reset_pin`, `software`, `panic`, `watchdog`, `brownout`, `other` |
+| `boot` | string | When `open` is `boot`: `power_on`, `reset_pin`, `software`, `panic`, `watchdog`, `brownout`, `usb` (reset from the USB port, e.g. flashing), `jtag`, `other` |
 | `fw` | string | Firmware version |
 | `dev` | string | Device id, its MAC address |
 | `profile` | object | The settings, below |
 
-`profile`:
+`profile`, every radio setting the session ran with. Region and receiver
+gain belong to the profile like the rest:
 
 | Field | Type | Content |
 |---|---|---|
-| `name` | string | Profile name |
+| `name` | string | Profile name: `Profile 1` to `Profile 3` for the base profiles, whatever the device's language; the name given by Link Studio for an imported one |
 | `region` | string | `EU868` or `US915` |
 | `freq_hz` | int | Carrier |
 | `sf` | int | Spreading factor, 5 to 12 |
@@ -110,10 +110,9 @@ First line of a session, and of each of its files.
 | `power_dbm` | int | Transmit power, conducted |
 | `preamble` | int | Preamble length, symbols |
 | `crc_on` | bool | CRC sent with our frames |
+| `iq_inverted` | bool | Inverted IQ, as LoRaWAN downlinks; false is standard |
 | `sync_word` | int | 18 (0x12) private, 52 (0x34) public |
 | `rx_gain` | string | `saving` (chip default) or `boosted` |
-| `id_offset` | int | Where the sender id starts in a payload |
-| `id_len` | int | Sender id width in bytes, 0 for none |
 
 ### `end`
 
@@ -130,22 +129,38 @@ One reception, successful or not.
 
 | Field | Present for | Content |
 |---|---|---|
-| `ts` | all | Start of the frame: its first symbol when its length is known, otherwise when the preamble (or the header) was detected |
-| `status` | all | `ok`, `crc` (CRC failed), `header_err` (header failed its own check), `incomplete` (a header passed, nothing complete followed) |
-| `len` | `ok`, `crc` | Payload length, bytes |
-| `data` | `ok`, `crc` | Payload, hex. Corrupt when `status` is `crc` |
-| `rssi_dbm` | `ok`, `crc` | Signal and noise together, averaged over the frame |
-| `snr_db` | `ok`, `crc` | Quarter dB steps, e.g. `-5.75` |
-| `freq_err_hz` | `ok`, `crc` | Sender's offset from the tuned frequency, signed |
-| `cr` | `ok`, `crc`, `incomplete` | From the frame's header |
-| `crc_on` | `ok`, `crc`, `incomplete` | From the frame's header |
-| `dbg.signal_dbm` | `ok`, `crc` | The signal alone after despreading (SignalRssiPkt) |
-| `dbg.pre_us` | when seen | Preamble detected, µs since boot |
-| `dbg.hdr_us` | when seen | Header received, µs since boot |
-| `dbg.end_us` | when seen | Reception ended, µs since boot |
+| `ts` | all | The frame's first symbol, computed back from the end of the frame when its length is known, otherwise from its header |
+| `status` | all | `ok`, `crc_err` (CRC failed), `header_err` (header failed its own check), `incomplete` (a header passed, nothing complete followed) |
+| `len` | `ok`, `crc_err` | Payload length, bytes |
+| `data` | `ok`, `crc_err` | Payload, hex. Corrupt when `status` is `crc_err` |
+| `rssi_dbm` | `ok`, `crc_err` | Signal and noise together, averaged over the frame |
+| `signal_dbm` | `ok`, `crc_err` | The signal alone after despreading (SignalRssiPkt) |
+| `snr_db` | `ok`, `crc_err` | Quarter dB steps, e.g. `-5.75` |
+| `freq_err_hz` | `ok`, `crc_err` | Sender's offset from the tuned frequency, signed |
+| `toa_ms` | `ok`, `crc_err` | Time on air as the device computed and shows it, from the frame's length, coding rate and CRC with the session's other settings; truncated to the ms |
+| `cr` | `ok`, `crc_err`, `incomplete` | From the frame's header |
+| `crc_on` | `ok`, `crc_err`, `incomplete` | From the frame's header |
+| `noise_dbm` | when sampled | The channel just before the frame: median of the last 20 instantaneous RSSI readings taken between frames, one every 100 ms (2 s) |
+| `inst_n` | when sampled | Instantaneous RSSI readings taken during the frame, from the preamble to its end, one every 10 to 20 ms: their number follows the frame's length |
+| `inst_min_dbm`, `inst_max_dbm` | when sampled | The lowest and highest of those readings |
 
-The `dbg` instants come from a monotonic clock: durations between them
-hold within a session whatever the wall clock does.
+`noise_dbm` is the background noise where the device stands, plus
+whatever transmits continuously; a short burst barely moves it. Set
+against `signal_dbm`, it says how far a frame stood above the noise.
+Compared across places or times, it shows where the channel is quieter.
+A noisy environment raises it, and so does the device itself when it is
+powered over USB, by about 3 dB on our bench.
+
+`inst_*` say whether the channel stayed steady while the frame was being
+received. A peak well above the frame's own level can mean that
+something else was transmitting at the same time, so that the frame was
+disturbed; a frame that failed without such a peak points rather at a
+signal too weak. When the signal is below the noise, the readings show
+the noise, not the frame: compare the peak with `signal_dbm` or
+`noise_dbm`, whichever is higher. A burst shorter than the interval
+between readings can go unseen. The instantaneous RSSI is not calibrated
+(SX1261/2 datasheet, 6.1.6): compare readings within a frame or a device,
+not across devices.
 
 ### `tx`
 
@@ -156,6 +171,7 @@ One of our transmissions.
 | `ts` | int | Start |
 | `len` | int | Payload length, bytes |
 | `data` | string | Payload, hex |
+| `toa_ms` | int | Time on air as the device computed and shows it, truncated to the ms |
 | `result` | string | `ok`, `timeout` (TX done never came), `aborted` (cut short by a reconfiguration or the sweep) |
 
 ### `gap`
@@ -182,14 +198,6 @@ behind. Should never appear.
 
 ## Sizes
 
-Estimates, not measurements: an `rx` line for a 14-byte frame, `dbg`
-included, is about 250 bytes; a 255-byte frame about 700. 4 MiB holds
-some 16 000 short frames, 11 days at one frame a minute.
-
-## Not recorded
-
-- Uptime as a product field: `ts` dates, the `dbg` instants measure.
-- Settings changes inside a session: there are none, by construction.
-- Time on air, band and regulatory limits: computed, by the app, from
-  `len` and the session's profile.
-- Statistics: computed by the app from the lines.
+Estimates, not measurements: an `rx` line for a 14-byte frame is about
+250 bytes; a 255-byte frame about 730. At one short frame a minute,
+4 MiB holds about 11 days.

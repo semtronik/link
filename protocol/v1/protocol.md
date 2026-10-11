@@ -1,8 +1,8 @@
 # Protocol
 
 How a Link device and Link Studio talk over USB. Written from the
-Link-LR firmware; the recording commands and messages are specified but
-not yet implemented, see [Changes planned](#changes-planned).
+Link-LR firmware. `tools/link_rec.py` in link-firmware drives the
+recording and profile commands from a command line.
 
 ## Transport
 
@@ -80,33 +80,70 @@ Any failure aborts the whole update; it restarts from `ota_begin`.
 `ack`, then the device restarts half a second later. Closes the current
 session (reason `reboot_cmd`).
 
+### `factory_reset`
+
+| Field | Content |
+|---|---|
+| `confirm` | Must be `"erase"`; anything else is refused |
+
+The device as it left the bench, firmware aside. `ack`, then half a
+second later the clock is left unset, the product's own data (Link-LR:
+every recording), the event log and every setting are erased, and the
+device restarts on its first-start setup. Nothing is recorded of it:
+there is nowhere left to record it.
+
+The same reset is on the device, at the bottom of the settings screen,
+behind a confirmation.
+
+| Error `msg` | Meaning |
+|---|---|
+| `confirm must be "erase"` | `confirm` missing or wrong; nothing erased |
+
 ## Link-LR commands
 
-### `get_config`
+Every radio setting belongs to the selected profile, whose object is the
+`profile` of the `session` line ([recording.md](recording.md)).
 
-Reply: `{"type":"cfg","freq":<MHz>,"sf":<int>,"bw":<kHz>,"drops":<int>,"rx_gain":"saving"|"boosted","region":"EU868"|"US915"}`.
-`drops` is the number of frames whose CRC failed since boot.
+### `get_profile`
 
-### `set_freq`, `set_sf`, `set_bw`
+Reply: `ack` with `profile`, the selected profile. Leaves the session
+alone.
 
-| Command | `value` |
+### `set_profile`
+
+| Field | Content |
 |---|---|
-| `set_freq` | MHz, 862 to 930 |
-| `set_sf` | 5 to 12 |
-| `set_bw` | kHz: 125, 250 or 500 |
+| `profile` | Object: the fields to change, named as in the session line's `profile` |
 
-Applied to the radio at once and stored. Each closes the current session
-(reason `app`).
+Fields left out keep their value. Every field is checked before anything
+is touched: one bad value leaves the radio, the profile and the session
+as they were. Then the settings are applied to the radio and stored in
+the selected profile, and the current session closes (reason `app`),
+whether or not a value changed.
 
-### `set_rx_gain`
+| Field | Accepted |
+|---|---|
+| `region` | `"EU868"` or `"US915"`. Informs, never restricts: it only changes how transmissions are assessed against the regulations |
+| `freq_hz` | 862000000 to 930000000 |
+| `sf` | 5 to 12 |
+| `bw_hz` | 62500, 125000, 250000 or 500000, the choices of the config screen |
+| `cr` | 5 to 8 |
+| `power_dbm` | -9 to 22 |
+| `preamble` | 1 to 65535 |
+| `crc_on`, `iq_inverted` | `true` or `false` |
+| `sync_word` | 0 to 255 |
+| `rx_gain` | `"saving"` or `"boosted"` |
 
-`value`: `"saving"` (the chip's default) or `"boosted"`. Closes the
-current session (reason `app`).
+Numbers must be whole. Reply: `ack` with `profile`, as applied.
 
-### `set_region`
-
-`value`: `"EU868"` or `"US915"`. Informs, never restricts: it only
-changes how transmissions are assessed against the regulations.
+| Error `msg` | Meaning |
+|---|---|
+| `profile must be an object` | No `profile`, or not an object |
+| `<field> must be ...` | That value is not accepted |
+| `name cannot be set` | A profile's name is not the device's to change |
+| `unknown field: <field>` | Not a profile field; nothing is ignored silently |
+| `no radio module` | No radio fitted or answering |
+| `radio refused the settings` | The chip did not take them; nothing stored |
 
 ### `tx`
 
@@ -126,8 +163,8 @@ What is recorded and in what format is in [recording.md](recording.md).
 ### Live lines
 
 Every line written to the recording is also sent as it is produced:
-`session`, `end`, `rx`, `tx`, `gap`, `lost`. They are pushed whether or
-not the app asked.
+`session`, `end`, `rx`, `tx`, `gap`, `lost`. They are pushed whether or not
+the app asked.
 
 ### `get_sessions`
 
@@ -173,17 +210,11 @@ done.
 2. `get_session` on the running one, then follow the live lines.
 3. Past sessions on demand, with `get_session`.
 
-## Changes planned
+## Replaced
 
-With recording:
-
-- `pkt` (good frames only) is removed. The `rx` line replaces it.
-- `txd` is removed. The `tx` line replaces it.
-- `cfg` and `get_config` are replaced by the `session` line, which
-  carries the whole profile.
-
-With the profile carrying every radio setting, gain and region included:
-
-- `set_freq`, `set_sf`, `set_bw`, `set_rx_gain` and `set_region` are to
-  be revised. One command per parameter closes one session per
-  parameter; a single command setting the whole profile would close one.
+| Gone | Replaced by |
+|---|---|
+| `pkt` | the `rx` line |
+| `txd` | the `tx` line |
+| `cfg`, `get_config` | the `session` line, and `get_profile` |
+| `set_freq`, `set_sf`, `set_bw`, `set_rx_gain`, `set_region` | `set_profile`: one command, one session closed, however many settings change |
