@@ -1,5 +1,7 @@
 # Link
 
+![Link-LR outdoors on a wooden table, showing its Stats screen](link-lr/images/link-lr_exterieur.jpg)
+
 **Link** is a range of tools for embedded developers, built to understand and
 verify links: radio, fieldbus, and the rest. Each one pairs a common base unit
 with the interface its job needs. **Link-LR**, the first, speaks LoRa P2P on
