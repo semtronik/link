@@ -27,6 +27,8 @@ Replies:
 | Malformed JSON | `err` with `cmd` set to `"?"` |
 | Unknown command | `err` with `msg` `"unknown command: <name>"` |
 
+A message without a string `cmd` gets no reply at all.
+
 Commands that stream several lines bracket them between two `ack`s with
 `"phase":"begin"` and `"phase":"end"`, the latter carrying `count`. The
 app knows the stream is complete, not merely paused.
@@ -39,8 +41,8 @@ Common to every Link product.
 
 Reply: `ack` with `product`, `model`, `version`, `build_date`.
 
-`product` and `model` are currently `"LFT"` and `"v1"`, the strings of
-the previous product, because the app recognises no other pair yet.
+`product` is `"Link"` on every product of the range. `model` names the
+product, and with it the interface module: `"Link-LR"`.
 
 ### `get_time`
 
@@ -56,6 +58,14 @@ Reply: `{"type":"time","utc":<epoch s>,"offset_min":<int>,"valid":<bool>}`.
 
 Writes the real-time clock and the system clock. Closes the current
 session (reason `time`).
+
+| Error `msg` | Meaning |
+|---|---|
+| `utc (epoch seconds) required` | `utc` missing or not a number |
+| `utc out of range` | Outside 2024-01-01 to 2100-01-01 |
+| `offset_min must be a number` | `offset_min` given but not a number |
+| `offset_min out of range` | Outside -720 to 840 |
+| `rtc write failed` | The clock chip did not take it |
 
 ### `get_events`
 
@@ -73,7 +83,32 @@ Firmware update.
 | `ota_data` | `data`: a chunk, base64 | `ack` with `written`, total bytes so far |
 | `ota_end` | | `ack` with `status` `"success"` once the image is verified |
 
-Any failure aborts the whole update; it restarts from `ota_begin`.
+Any failure aborts the whole update; it restarts from `ota_begin`. A line
+is at most 6 KiB, so a chunk is at most 4 KiB before base64.
+
+| Error `msg` | Meaning |
+|---|---|
+| `missing size or sha256` | `ota_begin` without them |
+| `ota_begin failed` | No partition to write, the image larger than it, or preparing it failed |
+| `missing data field` | `ota_data` without `data` |
+| `base64 decode failed` | `data` is not base64 |
+| `ota_write failed` | Writing the chunk to flash failed |
+| `verification failed` | `ota_end`: the image does not match `sha256` or does not validate |
+
+### `screenshot`
+
+The screen as it is displayed, streamed: `begin` with `width`, `height`,
+`format` (`"rgb565be"`) and `size` (bytes), then one
+`{"type":"screenshot","seq":<n>,"data":"<base64>"}` per 3072 bytes, then
+`end` with `count` and `crc32` (CRC-32 of the whole frame). On Link-LR:
+320 × 240, 153600 bytes in 50 lines. For documentation and support;
+`tools/link_screenshot.py` in link-firmware saves it as PNG.
+
+| Error `msg` | Meaning |
+|---|---|
+| `out of memory` | No room for the copy |
+| `no frame available` | Nothing displayed yet |
+| `base64 encode failed` | Should never appear |
 
 ### `reboot`
 
@@ -107,7 +142,7 @@ Every radio setting belongs to the selected profile, whose object is the
 ### `get_profile`
 
 Reply: `ack` with `profile`, the selected profile. Leaves the session
-alone.
+alone. Error `msg` `profile too long to send` should never appear.
 
 ### `set_profile`
 
@@ -142,8 +177,10 @@ Numbers must be whole. Reply: `ack` with `profile`, as applied.
 | `<field> must be ...` | That value is not accepted |
 | `name cannot be set` | A profile's name is not the device's to change |
 | `unknown field: <field>` | Not a profile field; nothing is ignored silently |
+| `radio settings out of range` | Each value is accepted, but not together |
 | `no radio module` | No radio fitted or answering |
 | `radio refused the settings` | The chip did not take them; nothing stored |
+| `profile too long to send` | Should never appear |
 
 ### `tx`
 
@@ -152,9 +189,12 @@ air; how it ended follows as a `tx` line.
 
 | Error `msg` | Meaning |
 |---|---|
+| `value must be a hex string` | `value` missing or not a string |
+| `value must be 1 to 255 bytes of hex` | Empty, too long, odd length or not hex |
 | `no radio module` | No radio fitted or answering |
 | `radio busy (scan)` | The band sweep holds the radio |
 | `previous frame still on air` | One transmission at a time |
+| `radio refused the frame` | The chip did not take it |
 
 ## Recording
 
@@ -182,6 +222,9 @@ line per session, then `end` with `count`.
 | `truncated` | `true` when rotation deleted its first files |
 | `bytes` | Its size on the device |
 
+At most 256 sessions are listed. Error `msg` `out of memory` should
+never appear.
+
 ### `get_session`
 
 | Field | Content |
@@ -189,8 +232,13 @@ line per session, then `end` with `count`.
 | `id` | Session number |
 
 `begin` with `id`, then the session's lines exactly as recorded, then
-`end` with `id` and `count`. Error `msg` `unknown session` if it is not
-on the device.
+`end` with `id` and `count`.
+
+| Error `msg` | Meaning |
+|---|---|
+| `id (session number) required` | `id` missing or not a number |
+| `unknown session` | Not on the device |
+| `out of memory` | Should never appear |
 
 For the running session, the stream covers every line up to `end`,
 including those not yet flushed to flash. Live lines produced meanwhile
@@ -202,7 +250,8 @@ arrived before `begin` are also in the stream and must be ignored.
 
 Deletes every recording. Closes the current session (reason `erase`); a
 new one opens as soon as the Journal screen is displayed. `ack` once
-done.
+done. Error `msg` `recording not running` when recording never started
+at power-up.
 
 ### On connection
 
