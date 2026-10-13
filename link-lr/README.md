@@ -57,6 +57,11 @@ base.
 The link margin is the SNR above the lowest the spreading factor can
 demodulate: 10 dB and more is good, 3 to 10 dB fair, below 3 dB poor.
 
+## Availability
+
+Not on sale yet. Planned price and email sign-up:
+[semtronik.com/en/link-lr](https://semtronik.com/en/link-lr).
+
 ## Open source
 
 | | Repository | License |

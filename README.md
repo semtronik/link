@@ -38,7 +38,7 @@ alongside `v1/`.
 
 ## Semtronik
 
-Link is built by [Semtronik](https://semtronik.com).
+Link is built by [Semtronik](https://semtronik.com/en).
 
 ## License
 
